@@ -1,0 +1,82 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # ينشئ مجلد android الأساسي في مكان مؤقت ثم ينسخه للمشروع
+      - name: Generate Android project
+        run: |
+          flutter create --platforms=android --project-name medication_reminder --org com.example /tmp/app
+          cp -r /tmp/app/android ./android
+
+      # يضيف الأذونات ومستقبلات الإشعارات وإعدادات desugaring تلقائيًا
+      - name: Patch Android config
+        run: |
+          python3 - <<'EOF'
+          import os
+
+          # 1) AndroidManifest
+          mp = 'android/app/src/main/AndroidManifest.xml'
+          s = open(mp, encoding='utf-8').read()
+          perms = (
+              '    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>\n'
+              '    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>\n'
+              '    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>\n'
+              '    <uses-permission android:name="android.permission.VIBRATE"/>\n'
+          )
+          receivers = (
+              '        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"/>\n'
+              '        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">\n'
+              '            <intent-filter>\n'
+              '                <action android:name="android.intent.action.BOOT_COMPLETED"/>\n'
+              '                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>\n'
+              '            </intent-filter>\n'
+              '        </receiver>\n'
+          )
+          s = s.replace('<application', perms + '    <application', 1)
+          s = s.replace('</application>', receivers + '    </application>', 1)
+          open(mp, 'w', encoding='utf-8').write(s)
+
+          # 2) Gradle desugaring (يدعم kts و groovy)
+          variants = [
+              ('android/app/build.gradle.kts',
+               'isCoreLibraryDesugaringEnabled = true',
+               'dependencies {\n    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")\n}\n'),
+              ('android/app/build.gradle',
+               'coreLibraryDesugaringEnabled true',
+               "dependencies {\n    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'\n}\n"),
+          ]
+          for path, flag, dep in variants:
+              if os.path.exists(path):
+                  g = open(path, encoding='utf-8').read()
+                  g = g.replace('compileOptions {', 'compileOptions {\n        ' + flag, 1)
+                  g += '\n' + dep
+                  open(path, 'w', encoding='utf-8').write(g)
+          EOF
+
+      - run: flutter pub get
+
+      - run: flutter build apk --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: medication-reminder-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
