@@ -21,19 +21,16 @@ jobs:
           channel: stable
           cache: true
 
-      # ينشئ مجلد android الأساسي في مكان مؤقت ثم ينسخه للمشروع
       - name: Generate Android project
         run: |
           flutter create --platforms=android --project-name medication_reminder --org com.example /tmp/app
           cp -r /tmp/app/android ./android
 
-      # يضيف الأذونات ومستقبلات الإشعارات وإعدادات desugaring تلقائيًا
       - name: Patch Android config
         run: |
           python3 - <<'EOF'
           import os
 
-          # 1) AndroidManifest
           mp = 'android/app/src/main/AndroidManifest.xml'
           s = open(mp, encoding='utf-8').read()
           perms = (
@@ -55,7 +52,6 @@ jobs:
           s = s.replace('</application>', receivers + '    </application>', 1)
           open(mp, 'w', encoding='utf-8').write(s)
 
-          # 2) Gradle desugaring (يدعم kts و groovy)
           variants = [
               ('android/app/build.gradle.kts',
                'isCoreLibraryDesugaringEnabled = true',
@@ -73,6 +69,10 @@ jobs:
           EOF
 
       - run: flutter pub get
+
+      - run: dart run flutter_launcher_icons
+
+      - run: sed -i 's/android:label="medication_reminder"/android:label="أدويتي"/' android/app/src/main/AndroidManifest.xml
 
       - run: flutter build apk --release
 
