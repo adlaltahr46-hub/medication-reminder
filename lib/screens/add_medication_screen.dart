@@ -1,138 +1,170 @@
 import 'package:flutter/material.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 
+import '../models/dose_log.dart';
 import '../models/medication.dart';
+import '../services/dose_log_store.dart';
 import '../services/medication_store.dart';
 import '../services/notification_service.dart';
+import 'add_medication_screen.dart';
+import 'dose_history_screen.dart';
+import 'settings_screen.dart';
 
-class AddMedicationScreen extends StatefulWidget {
-  const AddMedicationScreen({super.key});
+class HomeScreen extends StatelessWidget {
+  const HomeScreen({super.key});
 
-  @override
-  State<AddMedicationScreen> createState() => _AddMedicationScreenState();
-}
-
-class _AddMedicationScreenState extends State<AddMedicationScreen> {
-  final _formKey = GlobalKey<FormState>();
-  final _name = TextEditingController();
-  final _dosage = TextEditingController();
-  final _days = TextEditingController(text: '7');
-  final List<TimeOfDay> _times = [];
-  bool _timesError = false;
-
-  @override
-  void dispose() {
-    _name.dispose();
-    _dosage.dispose();
-    _days.dispose();
-    super.dispose();
-  }
-
-  String _fmt(TimeOfDay t) =>
-      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
-
-  Future<void> _pickTime() async {
-    final picked =
-        await showTimePicker(context: context, initialTime: TimeOfDay.now());
-    if (picked == null) return;
-    if (_times.any((t) => t.hour == picked.hour && t.minute == picked.minute)) {
-      return;
+  Future<void> _takeDose(BuildContext context, Medication m) async {
+    final updated = m.copyWith(takenDoses: m.takenDoses + 1);
+    await MedicationStore.save(updated);
+    await DoseLogStore.add(DoseLog(
+      medId: m.id,
+      medName: m.name,
+      takenAt: DateTime.now(),
+    ));
+    if (updated.isFinished) {
+      await NotificationService.cancel(updated);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('انتهت جرعات ${m.name}')),
+        );
+      }
     }
-    setState(() {
-      _times
-        ..add(picked)
-        ..sort((a, b) => (a.hour * 60 + a.minute) - (b.hour * 60 + b.minute));
-      _timesError = false;
-    });
   }
 
-  Future<void> _save() async {
-    final valid = _formKey.currentState!.validate();
-    if (_times.isEmpty) setState(() => _timesError = true);
-    if (!valid || _times.isEmpty) return;
-
-    final days = int.parse(_days.text);
-    final med = Medication(
-      id: DateTime.now().millisecondsSinceEpoch % 1000000,
-      name: _name.text.trim(),
-      dosage: _dosage.text.trim(),
-      times: _times.map(_fmt).toList(),
-      totalDoses: _times.length * days,
+  Future<void> _delete(BuildContext context, Medication m) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('حذف ${m.name}؟'),
+        content: const Text('سيتم إيقاف التذكيرات الخاصة بهذا الدواء.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('إلغاء')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('حذف')),
+        ],
+      ),
     );
-
-    await MedicationStore.save(med);
-    await NotificationService.schedule(med);
-    if (mounted) Navigator.of(context).pop();
+    if (ok != true) return;
+    await NotificationService.cancel(m);
+    await MedicationStore.delete(m);
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('إضافة دواء')),
-      body: Form(
-        key: _formKey,
-        child: ListView(
-          padding: const EdgeInsets.all(20),
-          children: [
-            TextFormField(
-              controller: _name,
-              decoration: const InputDecoration(labelText: 'اسم الدواء'),
-              validator: (v) =>
-                  (v == null || v.trim().isEmpty) ? 'اكتب اسم الدواء' : null,
+      appBar: AppBar(
+        title: const Text('أدويتي'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.history),
+            tooltip: 'سجل الجرعات',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const DoseHistoryScreen()),
             ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _dosage,
-              decoration: const InputDecoration(
-                labelText: 'الجرعة',
-                hintText: 'مثال: حبة واحدة أو 500 ملجم',
+          ),
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'الإعدادات',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SettingsScreen()),
+            ),
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const AddMedicationScreen()),
+        ),
+        icon: const Icon(Icons.add),
+        label: const Text('إضافة دواء'),
+      ),
+      body: ValueListenableBuilder<Box<String>>(
+        valueListenable: MedicationStore.listenable,
+        builder: (context, _, __) {
+          final meds = MedicationStore.all();
+          if (meds.isEmpty) {
+            return const Center(
+              child: Padding(
+                padding: EdgeInsets.all(32),
+                child: Text(
+                  'لا توجد أدوية بعد.\nأضف أول دواء لتبدأ التذكيرات.',
+                  textAlign: TextAlign.center,
+                ),
               ),
-              validator: (v) =>
-                  (v == null || v.trim().isEmpty) ? 'اكتب الجرعة' : null,
+            );
+          }
+          return ListView.separated(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+            itemCount: meds.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 12),
+            itemBuilder: (context, i) => _MedicationCard(
+              med: meds[i],
+              onTake: () => _takeDose(context, meds[i]),
+              onDelete: () => _delete(context, meds[i]),
             ),
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _days,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'مدة العلاج (بالأيام)'),
-              validator: (v) {
-                final n = int.tryParse(v ?? '');
-                return (n == null || n < 1) ? 'اكتب عدد أيام صحيح' : null;
-              },
-            ),
-            const SizedBox(height: 24),
-            Text('مواعيد الجرعات في اليوم', style: theme.textTheme.titleMedium),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _MedicationCard extends StatelessWidget {
+  final Medication med;
+  final VoidCallback onTake;
+  final VoidCallback onDelete;
+
+  const _MedicationCard({
+    required this.med,
+    required this.onTake,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
               children: [
-                for (final t in _times)
-                  InputChip(
-                    label: Text(_fmt(t)),
-                    onDeleted: () => setState(() => _times.remove(t)),
-                  ),
-                ActionChip(
-                  avatar: const Icon(Icons.add, size: 18),
-                  label: const Text('إضافة موعد'),
-                  onPressed: _pickTime,
+                Expanded(
+                  child: Text(med.name, style: theme.textTheme.titleMedium),
+                ),
+                IconButton(
+                  onPressed: onDelete,
+                  icon: const Icon(Icons.delete_outline),
+                  tooltip: 'حذف',
                 ),
               ],
             ),
-            if (_timesError)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  'أضف موعدًا واحدًا على الأقل',
-                  style: TextStyle(color: theme.colorScheme.error),
+            Text(med.dosage, style: theme.textTheme.bodyMedium),
+            const SizedBox(height: 4),
+            Text('المواعيد: ${med.times.join('  ')}',
+                style: theme.textTheme.bodySmall),
+            const SizedBox(height: 12),
+            LinearProgressIndicator(value: med.progress, minHeight: 8),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    med.isFinished
+                        ? 'اكتملت الجرعات'
+                        : 'المتبقي ${med.remainingDoses} من ${med.totalDoses} جرعة',
+                  ),
                 ),
-              ),
-            const SizedBox(height: 32),
-            FilledButton(
-              onPressed: _save,
-              style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(52)),
-              child: const Text('حفظ الدواء'),
+                FilledButton(
+                  onPressed: med.isFinished ? null : onTake,
+                  child: const Text('أخذت الجرعة'),
+                ),
+              ],
             ),
           ],
         ),
