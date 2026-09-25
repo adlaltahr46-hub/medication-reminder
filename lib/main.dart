@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
 import 'screens/home_screen.dart';
+import 'services/dose_log_store.dart';
 import 'services/medication_store.dart';
 import 'services/notification_service.dart';
 
@@ -11,6 +12,7 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Hive.initFlutter();
   await MedicationStore.open();
+  await DoseLogStore.open();
   await NotificationService.init();
   runApp(const MedicationApp());
 }
