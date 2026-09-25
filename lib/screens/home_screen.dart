@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
+import '../models/dose_log.dart';
 import '../models/medication.dart';
+import '../services/dose_log_store.dart';
 import '../services/medication_store.dart';
 import '../services/notification_service.dart';
 import 'add_medication_screen.dart';
+import 'dose_history_screen.dart';
+import 'settings_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -12,6 +16,11 @@ class HomeScreen extends StatelessWidget {
   Future<void> _takeDose(BuildContext context, Medication m) async {
     final updated = m.copyWith(takenDoses: m.takenDoses + 1);
     await MedicationStore.save(updated);
+    await DoseLogStore.add(DoseLog(
+      medId: m.id,
+      medName: m.name,
+      takenAt: DateTime.now(),
+    ));
     if (updated.isFinished) {
       await NotificationService.cancel(updated);
       if (context.mounted) {
@@ -46,7 +55,25 @@ class HomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('أدويتي')),
+      appBar: AppBar(
+        title: const Text('أدويتي'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.history),
+            tooltip: 'سجل الجرعات',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const DoseHistoryScreen()),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'الإعدادات',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SettingsScreen()),
+            ),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => Navigator.of(context).push(
           MaterialPageRoute(builder: (_) => const AddMedicationScreen()),
